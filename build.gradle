@@ -379,3 +379,23 @@ project(':clients') {
     archives testJar
   }
 }
+
+project(":kafka-shell") {
+  apply plugin: 'java'
+
+  task shellTarGz(type: Tar) {
+    compression = Compression.GZIP
+    classifier = 'dist'
+    from '../bin'
+    from '../config'
+    from '../LICENSE'
+    from '../NOTICE'
+  }
+
+  artifacts {
+    archives(shellTarGz) {
+      name 'kafka-shell'
+      classifier 'dist'
+    }
+  }
+}
