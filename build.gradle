@@ -830,3 +830,21 @@ project(':connect:file') {
   }
   test.dependsOn('checkstyleMain', 'checkstyleTest')
 }
+
+project(":kafka-shell") {
+  task shellTarGz(type: Tar) {
+    compression = Compression.GZIP
+    classifier = 'dist'
+    from(project.file("../bin")) { into "bin/" }
+    from(project.file("../config")) { into "config/" }
+    from '../LICENSE'
+    from '../NOTICE'
+  }
+
+  artifacts {
+    archives(shellTarGz) {
+      name 'kafka-shell'
+      classifier 'dist'
+    }
+  }
+}
