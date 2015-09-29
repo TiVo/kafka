@@ -813,13 +813,11 @@ project(':copycat:file') {
 }
 
 project(":kafka-shell") {
-  apply plugin: 'java'
-
   task shellTarGz(type: Tar) {
     compression = Compression.GZIP
     classifier = 'dist'
-    from '../bin'
-    from '../config'
+    from(project.file("../bin")) { into "bin/" }
+    from(project.file("../config")) { into "config/" }
     from '../LICENSE'
     from '../NOTICE'
   }
