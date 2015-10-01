@@ -95,6 +95,13 @@ object MirrorMaker extends Logging {
       .describedAs("Java regex (String)")
       .ofType(classOf[String])
 
+    val topicPrefixOpt = parser.accepts("topic.prefix",
+      "Prefix prepended onto mirrored topic names")
+      .withRequiredArg()
+      .describedAs("Prefix (String)")
+      .ofType(classOf[String])
+      .defaultsTo("")
+
     val helpOpt = parser.accepts("help", "Print this message.")
     
     if(args.length == 0)
@@ -130,6 +137,7 @@ object MirrorMaker extends Logging {
     val useNewProducer = options.has(useNewProducerOpt)
     val producerProps = Utils.loadProps(options.valueOf(producerConfigOpt))
     val clientId = producerProps.getProperty("client.id", "")
+    val topicPrefix = options.valueOf(topicPrefixOpt)
     producerThreads = (0 until numProducers).map(i => {
       producerProps.setProperty("client.id", clientId + "-" + i)
       val producer =
@@ -140,7 +148,7 @@ object MirrorMaker extends Logging {
       }
       else
         new OldProducer(producerProps)
-      new ProducerThread(mirrorDataChannel, producer, i)
+      new ProducerThread(mirrorDataChannel, producer, i, topicPrefix)
     })
 
     // create consumer threads
@@ -288,7 +296,8 @@ object MirrorMaker extends Logging {
 
   class ProducerThread (val dataChannel: DataChannel,
                         val producer: BaseProducer,
-                        val threadId: Int) extends Thread with Logging with KafkaMetricsGroup {
+                        val threadId: Int,
+		        val topicPrefix: String) extends Thread with Logging with KafkaMetricsGroup {
     private val threadName = "mirrormaker-producer-" + threadId
     private val shutdownComplete: CountDownLatch = new CountDownLatch(1)
     private var isCleanShutdown: Boolean = true
@@ -306,7 +315,7 @@ object MirrorMaker extends Logging {
             info("Received shutdown message")
             return
           }
-          producer.send(data.topic(), data.key(), data.value())
+          producer.send(topicPrefix + data.topic(), data.key(), data.value())
         }
       } catch {
         case t: Throwable => {
