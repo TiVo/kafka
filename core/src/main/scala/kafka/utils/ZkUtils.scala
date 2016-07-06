@@ -792,6 +792,54 @@ class ZkUtils(val zkClient: ZkClient,
     }
   }
 
+  // Parses without deduplicating keys so the data can be checked before allowing reassignment to proceed
+  def parsePartitionReassignmentDataWithoutDedup(jsonData: String): Seq[(TopicAndPartition, Seq[Int])] = {
+    Json.parseFull(jsonData) match {
+      case Some(m) =>
+        m.asInstanceOf[Map[String, Any]].get("partitions") match {
+          case Some(partitionsSeq) =>
+            partitionsSeq.asInstanceOf[Seq[Map[String, Any]]].map(p => {
+              val topic = p.get("topic").get.asInstanceOf[String]
+              val partition = p.get("partition").get.asInstanceOf[Int]
+              val newReplicas = p.get("replicas").get.asInstanceOf[Seq[Int]]
+              TopicAndPartition(topic, partition) -> newReplicas
+            })
+          case None =>
+            Seq.empty
+        }
+      case None =>
+        Seq.empty
+    }
+  }
+
+  def parsePartitionReassignmentData(jsonData: String): Map[TopicAndPartition, Seq[Int]] = {
+    parsePartitionReassignmentDataWithoutDedup(jsonData).toMap
+  }
+
+  def parseTopicsData(jsonData: String): Seq[(String, Int)] = {
+    var topics = List.empty[(String, Int)]
+    Json.parseFull(jsonData) match {
+      case Some(m) =>
+        m.asInstanceOf[Map[String, Any]].get("topics") match {
+          case Some(partitionsSeq) =>
+            val mapPartitionSeq = partitionsSeq.asInstanceOf[Seq[Map[String, Any]]]
+            mapPartitionSeq.foreach(p => {
+              val topic = p.get("topic").get.asInstanceOf[String]
+              val replicationFactor = p.getOrElse("replication-factor", -1).asInstanceOf[Int]
+              topics ++= List((topic, replicationFactor))
+            })
+          case None =>
+        }
+      case None =>
+    }
+    topics
+  }
+
+  def formatAsReassignmentJson(partitionsToBeReassigned: Map[TopicAndPartition, Seq[Int]]): String = {
+    Json.encode(Map("version" -> 1, "partitions" -> partitionsToBeReassigned.map(e => Map("topic" -> e._1.topic, "partition" -> e._1.partition,
+                                                                                          "replicas" -> e._2))))
+  }
+
   def updatePartitionReassignmentData(partitionsToBeReassigned: Map[TopicAndPartition, Seq[Int]]) {
     val zkPath = ReassignPartitionsPath
     partitionsToBeReassigned.size match {
