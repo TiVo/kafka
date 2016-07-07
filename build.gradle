@@ -698,6 +698,14 @@ project(':core') {
   checkstyle {
     configProperties = [importControlFile: "$rootDir/checkstyle/import-control-core.xml"]
   }
+
+  configurations { 
+    distribution
+  }
+
+  artifacts { 
+    distribution releaseTarGz
+  }
 }
 
 project(':examples') {
