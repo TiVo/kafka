@@ -26,7 +26,7 @@ import kafka.common.{LogCleaningAbortedException, TopicAndPartition}
 import kafka.metrics.KafkaMetricsGroup
 import kafka.server.OffsetCheckpoint
 import kafka.utils.CoreUtils._
-import kafka.utils.{Logging, Pool, Time}
+import kafka.utils.{Logging, Pool, SystemTime, Time}
 
 import scala.collection.{immutable, mutable}
 
@@ -68,6 +68,10 @@ private[log] class LogCleanerManager(val logDirs: Array[File], val logs: Pool[To
   @volatile private var dirtiestLogCleanableRatio = 0.0
   newGauge("max-dirty-percent", new Gauge[Int] { def value = (100 * dirtiestLogCleanableRatio).toInt })
 
+  /* a gauge for tracking the time since the last log cleaner run, in milli seconds */
+  @volatile private var timeOfLastRun : Long = SystemTime.milliseconds
+  newGauge("time-since-last-run-ms", new Gauge[Long] { def value = SystemTime.milliseconds - timeOfLastRun })
+
   /**
    * @return the position processed for all logs.
    */
@@ -82,6 +86,7 @@ private[log] class LogCleanerManager(val logDirs: Array[File], val logs: Pool[To
   def grabFilthiestCompactedLog(time: Time): Option[LogToClean] = {
     inLock(lock) {
       val now = time.milliseconds
+      this.timeOfLastRun = now
       val lastClean = allCleanerCheckpoints
       val dirtyLogs = logs.filter {
         case (_, log) => log.config.compact  // match logs that are marked as compacted
