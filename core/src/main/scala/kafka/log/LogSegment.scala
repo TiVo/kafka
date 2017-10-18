@@ -319,6 +319,19 @@ class LogSegment(val log: FileRecords,
     }
   }
 
+  def lastOffset(): Long = {
+     //workaround: index file was zero but log contains entries - calculate the last offset
+     if ( index.baseOffset == index.lastOffset && log.sizeInBytes() > 0)
+     {
+          nextOffset() - 1
+     }
+     else
+     {
+         index.lastOffset
+     }
+  }
+
+
   /**
    * Flush this log segment to disk
    */
