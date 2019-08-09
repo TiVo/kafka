@@ -33,6 +33,8 @@ import org.apache.kafka.common.utils.{Time, Utils}
 import scala.collection.{Map, mutable}
 import scala.collection.mutable.ArrayBuffer
 import scala.collection.JavaConverters._
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.core.JsonGenerator
 
 object DumpLogSegments {
 
@@ -50,14 +52,15 @@ object DumpLogSegments {
 
     for (arg <- opts.files) {
       val file = new File(arg)
-      println(s"Dumping $file")
+      if (!opts.shouldPrintJson)
+        println(s"Dumping $file")
 
       val filename = file.getName
       val suffix = filename.substring(filename.lastIndexOf("."))
       suffix match {
         case Log.LogFileSuffix =>
           dumpLog(file, opts.shouldPrintDataLog, nonConsecutivePairsForLogFilesMap, opts.isDeepIteration,
-            opts.maxMessageSize, opts.messageParser)
+            opts.maxMessageSize, opts.messageParser, opts.shouldPrintJson)
         case Log.IndexFileSuffix =>
           dumpIndex(file, opts.indexSanityOnly, opts.verifyOnly, misMatchesForIndexFilesMap, opts.maxMessageSize)
         case Log.TimeIndexFileSuffix =>
@@ -218,14 +221,14 @@ object DumpLogSegments {
 
   private class DecoderMessageParser[K, V](keyDecoder: Decoder[K], valueDecoder: Decoder[V]) extends MessageParser[K, V] {
     override def parse(record: Record): (Option[K], Option[V]) = {
-      if (!record.hasValue) {
-        (None, None)
-      } else {
-        val key = if (record.hasKey)
-          Some(keyDecoder.fromBytes(Utils.readBytes(record.key)))
-        else
-          None
+      val key = if (record.hasKey)
+        Some(keyDecoder.fromBytes(Utils.readBytes(record.key)))
+      else
+        None
 
+      if (!record.hasValue) {
+        (key, None)
+      } else {
         val payload = Some(valueDecoder.fromBytes(Utils.readBytes(record.value)))
 
         (key, payload)
@@ -326,18 +329,22 @@ object DumpLogSegments {
                       nonConsecutivePairsForLogFilesMap: mutable.Map[String, List[(Long, Long)]],
                       isDeepIteration: Boolean,
                       maxMessageSize: Int,
-                      parser: MessageParser[_, _]) {
+                      parser: MessageParser[_, _],
+                      printJson: Boolean) {
     val startOffset = file.getName.split("\\.")(0).toLong
-    println("Starting offset: " + startOffset)
+    if (!printJson)
+      println("Starting offset: " + startOffset)
     val fileRecords = FileRecords.open(file, false)
     try {
       var validBytes = 0L
       var lastOffset = -1L
 
       for (batch <- fileRecords.batches.asScala) {
-        printBatchLevel(batch, validBytes)
+        val batchMap = printBatchLevel(batch, validBytes, printJson)
         if (isDeepIteration) {
           for (record <- batch.asScala) {
+            val recordMap = mutable.LinkedHashMap[String, Any]()
+
             if (lastOffset == -1)
               lastOffset = record.offset
             else if (record.offset != lastOffset + 1) {
@@ -347,13 +354,18 @@ object DumpLogSegments {
             }
             lastOffset = record.offset
 
-            print(s"$RecordIndent offset: ${record.offset} ${batch.timestampType}: ${record.timestamp} " +
-              s"keysize: ${record.keySize} valuesize: ${record.valueSize}")
+            recordMap += ("offset" -> record.offset,
+              batch.timestampType.toString() -> record.timestamp,
+              "keysize" -> record.keySize,
+              "valuesize" -> record.valueSize)
 
+            
             if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
-              print(" sequence: " + record.sequence + " headerKeys: " + record.headers.map(_.key).mkString("[", ",", "]"))
+              recordMap += ("sequence" -> record.sequence, 
+                  "headerKeys" -> record.headers.map(_.key))
             } else {
-              print(s" crc: ${record.checksumOrNull} isvalid: ${record.isValid}")
+              recordMap += ("crc" -> record.checksumOrNull,
+                  "isvalid" -> record.isValid)
             }
 
             if (batch.isControlBatch) {
@@ -361,16 +373,41 @@ object DumpLogSegments {
               ControlRecordType.fromTypeId(controlTypeId) match {
                 case ControlRecordType.ABORT | ControlRecordType.COMMIT =>
                   val endTxnMarker = EndTransactionMarker.deserialize(record)
-                  print(s" endTxnMarker: ${endTxnMarker.controlType} coordinatorEpoch: ${endTxnMarker.coordinatorEpoch}")
+                  recordMap += ("endTxnMarker" -> endTxnMarker.controlType,
+                      "coordinatorEpoch" -> endTxnMarker.coordinatorEpoch)
                 case controlType =>
-                  print(s" controlType: $controlType($controlTypeId)")
+                  recordMap += ("controlType" -> ControlRecordType.fromTypeId(controlTypeId).toString())
               }
             } else if (printContents) {
               val (key, payload) = parser.parse(record)
-              key.foreach(key => print(s" key: $key"))
-              payload.foreach(payload => print(s" payload: $payload"))
+              recordMap += ("key" -> key.getOrElse(None),
+                  "payload" -> payload.getOrElse(None))
             }
-            println()
+            if (printJson) {
+                // Turn Scala None into java null, so that the json encoder can put write it out as null
+                val fullMap = batchMap ++ recordMap
+                val withNulls = fullMap.map({
+                  case (key, None) => (key, null)
+                  case other => other;
+                })
+                val mapper = new ObjectMapper();
+                mapper.getFactory().configure(JsonGenerator.Feature.ESCAPE_NON_ASCII, true);
+                println(mapper.writeValueAsString(withNulls.asJava))
+            } else {
+                print(s"$RecordIndent ")
+                /* if headerKeys, print as [] array
+                 * if payload == None, then don't print anything
+                 */
+                print(recordMap
+                    .filterNot({ case (key, value) => key == "payload" && value == None})
+                    .map({ 
+                      case ("headerKeys", value) => "headerKeys" + ": " + value.asInstanceOf[Array[String]].mkString("[", ",", "]");
+                      case (key, value) => key.toString() + ": " + value
+                    }).mkString(" "))
+                println("")
+            }
+
+
           }
         }
         validBytes += batch.sizeInBytes
@@ -381,19 +418,35 @@ object DumpLogSegments {
     } finally fileRecords.closeHandlers()
   }
 
-  private def printBatchLevel(batch: FileLogInputStream.FileChannelRecordBatch, accumulativeBytes: Long): Unit = {
-    if (batch.magic >= RecordBatch.MAGIC_VALUE_V2)
-      print("baseOffset: " + batch.baseOffset + " lastOffset: " + batch.lastOffset + " count: " + batch.countOrNull +
-        " baseSequence: " + batch.baseSequence + " lastSequence: " + batch.lastSequence +
-        " producerId: " + batch.producerId + " producerEpoch: " + batch.producerEpoch +
-        " partitionLeaderEpoch: " + batch.partitionLeaderEpoch + " isTransactional: " + batch.isTransactional +
-        " isControl: " + batch.isControlBatch)
-    else
-      print("offset: " + batch.lastOffset)
+  private def printBatchLevel(batch: FileLogInputStream.FileChannelRecordBatch, accumulativeBytes: Long, printJson: Boolean): Map[String, Any] = {
+    val myMap = mutable.LinkedHashMap[String, Any]()
+    if (batch.magic >= RecordBatch.MAGIC_VALUE_V2) {
+      myMap += ("baseOffset" -> batch.baseOffset, 
+              "lastOffset" -> batch.lastOffset, 
+              "count" -> batch.countOrNull,
+              "baseSequence" -> batch.baseSequence, 
+              "lastSequence" -> batch.lastSequence,
+              "producerId" -> batch.producerId, 
+              "producerEpoch" -> batch.producerEpoch,
+              "partitionLeaderEpoch" -> batch.partitionLeaderEpoch, 
+              "isTransactional" -> batch.isTransactional,
+              "isControl" -> batch.isControlBatch);
+    } else { 
+      myMap += ("offset" -> batch.lastOffset);
+    }
 
-    println(" position: " + accumulativeBytes + " " + batch.timestampType + ": " + batch.maxTimestamp +
-      " size: " + batch.sizeInBytes + " magic: " + batch.magic +
-      " compresscodec: " + batch.compressionType + " crc: " + batch.checksum + " isvalid: " + batch.isValid)
+    myMap += ("position" -> accumulativeBytes,
+            batch.timestampType.toString() -> batch.maxTimestamp,
+            "size" -> batch.sizeInBytes,
+            "magic" -> batch.magic,
+            "compresscodec" -> batch.compressionType,
+            "crc" -> batch.checksum,
+            "isvalid" ->batch.isValid)
+   if (!printJson) {
+     myMap.foreach({case (key, value) => print(key + ": " + value + " ")})
+     println("")
+   }
+   myMap.toMap      
   }
 
   class TimeIndexDumpErrors {
@@ -451,7 +504,8 @@ object DumpLogSegments {
   }
 
   private class DumpLogSegmentsOptions(args: Array[String]) extends CommandDefaultOptions(args) {
-    val printOpt = parser.accepts("print-data-log", "if set, printing the messages content when dumping data logs. Automatically set if any decoder option is specified.")
+    val printJson = parser.accepts("print-data-log-json", "if set, prints the data in json")
+    val printOpt = parser.accepts("print-data-log", "if set, printing the messages content when dumping data logs. Automatically set if any decoder option is specified. Automatically set if --print-data-log-json is enabled.")
     val verifyOpt = parser.accepts("verify-index-only", "if set, just verify the index log without printing its content.")
     val indexSanityOpt = parser.accepts("index-sanity-check", "if set, just checks the index sanity without printing its content. " +
       "This is the same check that is executed on broker startup to determine if an index needs rebuilding or not.")
@@ -494,13 +548,15 @@ object DumpLogSegments {
       options.has(offsetsOpt) ||
       options.has(transactionLogOpt) ||
       options.has(valueDecoderOpt) ||
-      options.has(keyDecoderOpt)
+      options.has(keyDecoderOpt) ||
+      options.has(printJson)
 
     lazy val isDeepIteration: Boolean = options.has(deepIterationOpt) || shouldPrintDataLog
     lazy val verifyOnly: Boolean = options.has(verifyOpt)
     lazy val indexSanityOnly: Boolean = options.has(indexSanityOpt)
     lazy val files = options.valueOf(filesOpt).split(",")
     lazy val maxMessageSize = options.valueOf(maxMessageSizeOpt).intValue()
+    lazy val shouldPrintJson: Boolean = options.has(printJson)
 
     def checkArgs(): Unit = CommandLineUtils.checkRequiredArgs(parser, options, filesOpt)
 
