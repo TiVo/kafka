@@ -836,7 +836,7 @@ project(':core') {
     duplicatesStrategy 'exclude'
   }
 
-  tasks.create(name: "releaseTarGz", dependsOn: configurations.archives.artifacts, type: Tar) {
+  tasks.create(name: "releaseTarGz", dependsOn: configurations.runtime.artifacts, type: Tar) {
     into "kafka_${versions.baseScala}-${version}"
     compression = Compression.GZIP
     from(project.file("$rootDir/bin")) { into "bin/" }
@@ -844,7 +844,7 @@ project(':core') {
     from "$rootDir/LICENSE"
     from "$rootDir/NOTICE"
     from(configurations.runtime) { into("libs/") }
-    from(configurations.archives.artifacts.files) { into("libs/") }
+    from(configurations.runtime.artifacts.files) { into("libs/") }
     from(project.siteDocsTar) { into("site-docs/") }
     from(project(':tools').jar) { into("libs/") }
     from(project(':tools').configurations.runtime) { into("libs/") }
@@ -896,6 +896,14 @@ project(':core') {
 
   checkstyle {
     configProperties = checkstyleConfigProperties("import-control-core.xml")
+  }
+
+  configurations {
+    distribution
+  }
+
+  artifacts {
+    distribution releaseTarGz
   }
 }
 
