@@ -193,11 +193,11 @@ object TopicCommand extends Logging {
           "collide. To avoid issues it is best to use either, but not both.")
       createTopic(topic)
     }
-    def createTopic(topic: CommandTopicPartition)
-    def listTopics(opts: TopicCommandOptions)
-    def alterTopic(opts: TopicCommandOptions)
-    def describeTopic(opts: TopicCommandOptions)
-    def deleteTopic(opts: TopicCommandOptions)
+    def createTopic(topic: CommandTopicPartition): Unit
+    def listTopics(opts: TopicCommandOptions): Unit
+    def alterTopic(opts: TopicCommandOptions): Unit
+    def describeTopic(opts: TopicCommandOptions): Unit
+    def deleteTopic(opts: TopicCommandOptions): Unit
     def getTopics(topicWhitelist: Option[String], excludeInternalTopics: Boolean = false): Seq[String]
   }
 
@@ -371,8 +371,8 @@ object TopicCommand extends Logging {
           }
           println("WARNING: If partitions are increased for a topic that has a key, the partition " +
             "logic or ordering of the messages will be affected")
-          val existingAssignment = zkClient.getReplicaAssignmentForTopics(immutable.Set(topic)).map {
-            case (topicPartition, replicas) => topicPartition.partition -> replicas
+          val existingAssignment = zkClient.getFullReplicaAssignmentForTopics(immutable.Set(topic)).map {
+            case (topicPartition, assignment) => topicPartition.partition -> assignment
           }
           if (existingAssignment.isEmpty)
             throw new InvalidTopicException(s"The topic $topic does not exist")
@@ -401,14 +401,15 @@ object TopicCommand extends Logging {
               val configs = adminZkClient.fetchEntityConfig(ConfigType.Topic, topic).asScala
               if (!opts.reportOverriddenConfigs || configs.nonEmpty) {
                 val numPartitions = topicPartitionAssignment.size
-                val replicationFactor = topicPartitionAssignment.head._2.size
+                val replicationFactor = topicPartitionAssignment.head._2.replicas.size
                 val config = new JConfig(configs.map{ case (k, v) => new ConfigEntry(k, v) }.asJavaCollection)
                 val topicDesc = TopicDescription(topic, numPartitions, replicationFactor, config, markedForDeletion)
                 topicDesc.printDescription()
               }
             }
             if (describeOptions.describePartitions) {
-              for ((partitionId, assignedReplicas) <- topicPartitionAssignment.toSeq.sortBy(_._1)) {
+              for ((partitionId, replicaAssignment) <- topicPartitionAssignment.toSeq.sortBy(_._1)) {
+                val assignedReplicas = replicaAssignment.replicas
                 val tp = new TopicPartition(topic, partitionId)
                 val (leaderOpt, isr) =  zkClient.getTopicPartitionState(tp).map(_.leaderAndIsr) match {
                   case Some(leaderAndIsr) => (leaderAndIsr.leaderOpt, leaderAndIsr.isr)
@@ -453,8 +454,8 @@ object TopicCommand extends Logging {
             println(s"Topic $topic is already marked for deletion.")
           case e: AdminOperationException =>
             throw e
-          case _: Throwable =>
-            throw new AdminOperationException(s"Error while deleting topic $topic")
+          case e: Throwable =>
+            throw new AdminOperationException(s"Error while deleting topic $topic", e)
         }
       }
     }
@@ -649,7 +650,7 @@ object TopicCommand extends Logging {
     def topicConfig: Option[util.List[String]] = valuesAsOption(configOpt)
     def configsToDelete: Option[util.List[String]] = valuesAsOption(deleteConfigOpt)
 
-    def checkArgs() {
+    def checkArgs(): Unit = {
       if (args.length == 0)
         CommandLineUtils.printUsageAndDie(parser, "Create, delete, describe, or change a topic.")
 

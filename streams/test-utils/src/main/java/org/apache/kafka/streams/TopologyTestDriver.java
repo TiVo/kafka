@@ -27,7 +27,6 @@ import org.apache.kafka.common.Metric;
 import org.apache.kafka.common.MetricName;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.metrics.MetricConfig;
 import org.apache.kafka.common.metrics.Metrics;
@@ -186,7 +185,6 @@ import java.util.regex.Pattern;
  * @see ConsumerRecordFactory
  * @see OutputVerifier
  */
-@InterfaceStability.Evolving
 public class TopologyTestDriver implements Closeable {
 
     private static final Logger log = LoggerFactory.getLogger(TopologyTestDriver.class);
@@ -282,7 +280,11 @@ public class TopologyTestDriver implements Closeable {
         metrics = new Metrics(metricConfig, mockWallClockTime);
 
         final String threadName = "topology-test-driver-virtual-thread";
-        final StreamsMetricsImpl streamsMetrics = new StreamsMetricsImpl(metrics, threadName);
+        final StreamsMetricsImpl streamsMetrics = new StreamsMetricsImpl(
+            metrics,
+            threadName,
+            StreamsConfig.METRICS_LATEST
+        );
         final Sensor skippedRecordsSensor = streamsMetrics.threadLevelSensor("skipped-records", Sensor.RecordingLevel.INFO);
         final String threadLevelGroup = "stream-metrics";
         skippedRecordsSensor.add(new MetricName("skipped-records-rate",

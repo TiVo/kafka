@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +34,7 @@ import org.apache.kafka.common.acl.AclBinding;
 import org.apache.kafka.common.acl.AclBindingFilter;
 import org.apache.kafka.common.annotation.InterfaceStability;
 import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.requests.LeaveGroupResponse;
 
 /**
  * The administrative client for Kafka, which supports managing and inspecting topics, brokers, configurations and ACLs.
@@ -836,6 +838,29 @@ public interface Admin extends AutoCloseable {
     }
 
     /**
+     * Delete committed offsets for a set of partitions in a consumer group. This will
+     * succeed at the partition level only if the group is not actively subscribed
+     * to the corresponding topic.
+     *
+     * @param options The options to use when deleting offsets in a consumer group.
+     * @return The DeleteConsumerGroupOffsetsResult.
+     */
+    DeleteConsumerGroupOffsetsResult deleteConsumerGroupOffsets(String groupId,
+        Set<TopicPartition> partitions,
+        DeleteConsumerGroupOffsetsOptions options);
+
+    /**
+     * Delete committed offsets for a set of partitions in a consumer group with the default
+     * options. This will succeed at the partition level only if the group is not actively
+     * subscribed to the corresponding topic.
+     *
+     * @return The DeleteConsumerGroupOffsetsResult.
+     */
+    default DeleteConsumerGroupOffsetsResult deleteConsumerGroupOffsets(String groupId, Set<TopicPartition> partitions) {
+        return deleteConsumerGroupOffsets(groupId, partitions, new DeleteConsumerGroupOffsetsOptions());
+    }
+
+    /**
      * Elect the preferred replica as leader for topic partitions.
      * <p>
      * This is a convenience method for {@link #electLeaders(ElectionType, Set, ElectLeadersOptions)}
@@ -929,6 +954,131 @@ public interface Admin extends AutoCloseable {
         ElectionType electionType,
         Set<TopicPartition> partitions,
         ElectLeadersOptions options);
+
+
+    /**
+     * Change the reassignments for one or more partitions.
+     * Providing an empty Optional (e.g via {@link Optional#empty()}) will <bold>revert</bold> the reassignment for the associated partition.
+     *
+     * This is a convenience method for {@link #alterPartitionReassignments(Map, AlterPartitionReassignmentsOptions)}
+     * with default options.  See the overload for more details.
+     */
+    default AlterPartitionReassignmentsResult alterPartitionReassignments(
+        Map<TopicPartition, Optional<NewPartitionReassignment>> reassignments) {
+        return alterPartitionReassignments(reassignments, new AlterPartitionReassignmentsOptions());
+    }
+
+    /**
+     * Change the reassignments for one or more partitions.
+     * Providing an empty Optional (e.g via {@link Optional#empty()}) will <bold>revert</bold> the reassignment for the associated partition.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the futures obtained from
+     * the returned {@code AlterPartitionReassignmentsResult}:</p>
+     * <ul>
+     *   <li>{@link org.apache.kafka.common.errors.ClusterAuthorizationException}
+     *   If the authenticated user didn't have alter access to the cluster.</li>
+     *   <li>{@link org.apache.kafka.common.errors.UnknownTopicOrPartitionException}
+     *   If the topic or partition does not exist within the cluster.</li>
+     *   <li>{@link org.apache.kafka.common.errors.TimeoutException}
+     *   if the request timed out before the controller could record the new assignments.</li>
+     *   <li>{@link org.apache.kafka.common.errors.InvalidReplicaAssignmentException}
+     *   If the specified assignment was not valid.</li>
+     *   <li>{@link org.apache.kafka.common.errors.NoReassignmentInProgressException}
+     *   If there was an attempt to cancel a reassignment for a partition which was not being reassigned.</li>
+     * </ul>
+     *
+     * @param reassignments   The reassignments to add, modify, or remove.
+     * @param options         The options to use.
+     * @return                The result.
+     */
+    AlterPartitionReassignmentsResult alterPartitionReassignments(
+        Map<TopicPartition, Optional<NewPartitionReassignment>> reassignments,
+        AlterPartitionReassignmentsOptions options);
+
+
+    /**
+     * List all of the current partition reassignments
+     *
+     * This is a convenience method for {@link #listPartitionReassignments(ListPartitionReassignmentsOptions)}
+     * with default options. See the overload for more details.
+     */
+    default ListPartitionReassignmentsResult listPartitionReassignments() {
+        return listPartitionReassignments(new ListPartitionReassignmentsOptions());
+    }
+
+    /**
+     * List the current reassignments for the given partitions
+     *
+     * This is a convenience method for {@link #listPartitionReassignments(Set, ListPartitionReassignmentsOptions)}
+     * with default options. See the overload for more details.
+     */
+    default ListPartitionReassignmentsResult listPartitionReassignments(Set<TopicPartition> partitions) {
+        return listPartitionReassignments(partitions, new ListPartitionReassignmentsOptions());
+    }
+
+    /**
+     * List the current reassignments for the given partitions
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the futures obtained from
+     * the returned {@code ListPartitionReassignmentsResult}:</p>
+     * <ul>
+     *   <li>{@link org.apache.kafka.common.errors.ClusterAuthorizationException}
+     *   If the authenticated user doesn't have alter access to the cluster.</li>
+     *   <li>{@link org.apache.kafka.common.errors.UnknownTopicOrPartitionException}
+     *   If a given topic or partition does not exist.</li>
+     *   <li>{@link org.apache.kafka.common.errors.TimeoutException}
+     *   If the request timed out before the controller could list the current reassignments.</li>
+     * </ul>
+     *
+     * @param partitions      The topic partitions to list reassignments for.
+     * @param options         The options to use.
+     * @return                The result.
+     */
+    default ListPartitionReassignmentsResult listPartitionReassignments(
+        Set<TopicPartition> partitions,
+        ListPartitionReassignmentsOptions options) {
+        return listPartitionReassignments(Optional.of(partitions), options);
+    }
+
+    /**
+     * List all of the current partition reassignments
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on the futures obtained from
+     * the returned {@code ListPartitionReassignmentsResult}:</p>
+     * <ul>
+     *   <li>{@link org.apache.kafka.common.errors.ClusterAuthorizationException}
+     *   If the authenticated user doesn't have alter access to the cluster.</li>
+     *   <li>{@link org.apache.kafka.common.errors.UnknownTopicOrPartitionException}
+     *   If a given topic or partition does not exist.</li>
+     *   <li>{@link org.apache.kafka.common.errors.TimeoutException}
+     *   If the request timed out before the controller could list the current reassignments.</li>
+     * </ul>
+     *
+     * @param options         The options to use.
+     * @return                The result.
+     */
+    default ListPartitionReassignmentsResult listPartitionReassignments(ListPartitionReassignmentsOptions options) {
+        return listPartitionReassignments(Optional.empty(), options);
+    }
+
+    /**
+     * @param partitions the partitions we want to get reassignment for, or an empty optional if we want to get the reassignments for all partitions in the cluster
+     * @param options         The options to use.
+     * @return                The result.
+     */
+    ListPartitionReassignmentsResult listPartitionReassignments(Optional<Set<TopicPartition>> partitions,
+                                                                ListPartitionReassignmentsOptions options);
+
+    /**
+     * Remove members from the consumer group by given member identities.
+     * <p>
+     * For possible error codes, refer to {@link LeaveGroupResponse}.
+     *
+     * @param groupId The ID of the group to remove member from.
+     * @param options The options to carry removing members' information.
+     * @return The MembershipChangeResult.
+     */
+    MembershipChangeResult removeMemberFromConsumerGroup(String groupId, RemoveMemberFromConsumerGroupOptions options);
 
     /**
      * Get the metrics kept by the adminClient
